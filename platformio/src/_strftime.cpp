@@ -258,6 +258,11 @@ size_t _strftime(char *s, size_t maxsize, const char *format,
       format++;
       break;
 
+    case '-': // GNU extension: do not pad numeric fields
+      flag = '-';
+      format++;
+      break;
+
     case '1':
     case '2':
     case '3':
@@ -603,6 +608,17 @@ size_t _strftime(char *s, size_t maxsize, const char *format,
       tbuf[2] = '\0';
       break;
     }
+#ifdef POSIX_2008
+    if (flag == '-')
+    { // strip leading zeros/blanks, keep at least one character
+      char *p = tbuf;
+      while ((*p == '0' || *p == ' ') && *(p + 1) != '\0')
+      {
+        ++p;
+      }
+      memmove(tbuf, p, strlen(p) + 1);
+    }
+#endif // POSIX_2008
     i = strlen(tbuf);
     if (i)
     {
