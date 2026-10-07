@@ -1,0 +1,36 @@
+CJK FONTS
+
+The Adafruit GFX fonts only cover ISO-8859-1, so locales with CJK text (see
+LOCALE_USES_CJK_* in platformio/include/cjk_text.h) draw non-Latin-1
+characters from separate bitmap fonts. To save flash, those fonts only contain
+the characters that are actually used.
+
+Regenerate the fonts after changing any string in locale_zh_CN.inc or
+config.cpp (e.g. CITY_STRING):
+  python3 gen_cjk_fonts.py
+
+This scans the string literals of those files (plus extra_chars.txt, if
+present), downloads the source fonts into ./cache on first run, and writes the
+headers to platformio/lib/esp32-weather-epd-assets/fonts/cjk/.
+
+Characters missing from the generated fonts are drawn as blank space.
+
+Which CJK font is used with each Latin font size is set by CJK_FONT_PAIRS in
+platformio/src/renderer.cpp. Font sizes and sources are set by FONTS and
+SOURCES in gen_cjk_fonts.py.
+
+Dependencies:
+  Python 3, Pillow
+
+PREVIEW
+
+  bash preview/run_preview.sh
+
+Compiles platformio/src/cjk_text.cpp for the host together with the generated
+fonts, runs a few checks, and renders sample strings to preview/preview.png
+(and preview_3x.png). Requires a C++17 compiler.
+
+LICENSES
+
+  Fusion Pixel Font   SIL OFL v1.1   https://github.com/TakWolf/fusion-pixel-font
+  Noto Sans SC        SIL OFL v1.1   https://github.com/notofonts/noto-cjk

@@ -67,6 +67,7 @@ typedef enum alignment
   CENTER
 } alignment_t;
 
+void setFont(const GFXfont *font);
 uint16_t getStringWidth(const String &text);
 uint16_t getStringHeight(const String &text);
 void drawString(int16_t x, int16_t y, const String &text, alignment_t alignment,

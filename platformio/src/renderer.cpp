@@ -19,12 +19,16 @@
 #include "_strftime.h"
 #include "renderer.h"
 #include "api_response.h"
+#include "cjk_text.h"
 #include "config.h"
 #include "conversions.h"
 #include "display_utils.h"
 
 // fonts
 #include FONT_HEADER
+#if USE_CJK_TEXT
+  #include "fonts/cjk/CjkFonts.h"
+#endif
 
 // icon header files
 #include "icons/icons_16x16.h"
@@ -82,10 +86,60 @@
   #define ACCENT_COLOR GxEPD_BLACK
 #endif
 
+#if USE_CJK_TEXT
+// CJK font paired with each Latin font size. Strings that contain CJK
+// characters are drawn with the Latin font for ISO-8859-1 characters and the
+// paired CJK font for everything else. Latin fonts not listed here use the
+// CJK font of the entry with the closest line height.
+static const struct
+{
+  const GFXfont *latin;
+  const CjkFont *cjk;
+} CJK_FONT_PAIRS[] = {
+  {&FONT_5pt8b,  &FusionPixel_12px},
+  {&FONT_6pt8b,  &FusionPixel_12px},
+  {&FONT_7pt8b,  &FusionPixel_12px},
+  {&FONT_8pt8b,  &FusionPixel_12px},
+  {&FONT_11pt8b, &NotoSansSC_20px},
+  {&FONT_12pt8b, &NotoSansSC_22px},
+  {&FONT_16pt8b, &NotoSansSC_28px},
+  {&FONT_26pt8b, &NotoSansSC_44px},
+};
+static const GFXfont *currentFont    = nullptr;
+static const CjkFont *currentCjkFont = &FusionPixel_12px;
+#endif
+
+/* Sets the font used by all subsequent text drawing functions.
+ */
+void setFont(const GFXfont *font)
+{
+  display.setFont(font);
+#if USE_CJK_TEXT
+  currentFont = font;
+  int bestDiff = INT_MAX;
+  for (const auto &pair : CJK_FONT_PAIRS)
+  {
+    const int diff = abs(pair.latin->yAdvance - font->yAdvance);
+    if (diff < bestDiff)
+    {
+      bestDiff = diff;
+      currentCjkFont = pair.cjk;
+    }
+  }
+#endif
+  return;
+} // end setFont
+
 /* Returns the string width in pixels
  */
 uint16_t getStringWidth(const String &text)
 {
+#if USE_CJK_TEXT
+  if (containsCjk(text))
+  {
+    return getCjkStringWidth(text, currentFont, currentCjkFont);
+  }
+#endif
   int16_t x1, y1;
   uint16_t w, h;
   display.getTextBounds(text, 0, 0, &x1, &y1, &w, &h);
@@ -96,6 +150,12 @@ uint16_t getStringWidth(const String &text)
  */
 uint16_t getStringHeight(const String &text)
 {
+#if USE_CJK_TEXT
+  if (containsCjk(text))
+  {
+    return currentCjkFont->yAdvance;
+  }
+#endif
   int16_t x1, y1;
   uint16_t w, h;
   display.getTextBounds(text, 0, 0, &x1, &y1, &w, &h);
@@ -107,6 +167,22 @@ uint16_t getStringHeight(const String &text)
 void drawString(int16_t x, int16_t y, const String &text, alignment_t alignment,
                 uint16_t color)
 {
+#if USE_CJK_TEXT
+  if (containsCjk(text))
+  {
+    const uint16_t w = getCjkStringWidth(text, currentFont, currentCjkFont);
+    if (alignment == RIGHT)
+    {
+      x = x - w;
+    }
+    if (alignment == CENTER)
+    {
+      x = x - w / 2;
+    }
+    drawCjkString(display, x, y, text, currentFont, currentCjkFont, color);
+    return;
+  }
+#endif
   int16_t x1, y1;
   uint16_t w, h;
   display.setTextColor(color);
@@ -124,6 +200,59 @@ void drawString(int16_t x, int16_t y, const String &text, alignment_t alignment,
   return;
 } // end drawString
 
+#if USE_CJK_TEXT
+/* CJK variant of drawMultiLnString. CJK text has no spaces between words, so
+ * lines may break between any two characters. If text exceeds max_lines the
+ * last line is terminated with an ellipsis (...).
+ */
+static void drawCjkMultiLnString(int16_t x, int16_t y, const String &text,
+                                 alignment_t alignment, uint16_t max_width,
+                                 uint16_t max_lines, int16_t line_spacing,
+                                 uint16_t color)
+{
+  unsigned int start = 0;
+  for (uint16_t line = 0; line < max_lines && start < text.length(); ++line)
+  {
+    while (start < text.length() && text[start] == ' ')
+    {
+      ++start;
+    }
+    // take as many characters as fit, but always at least one
+    unsigned int end = start;
+    while (end < text.length())
+    {
+      const unsigned int next = end + utf8CharLength(text, end);
+      if (end > start
+       && getStringWidth(text.substring(start, next)) > max_width)
+      {
+        break;
+      }
+      end = next;
+    }
+
+    String lineStr = text.substring(start, end);
+    if (line == max_lines - 1 && end < text.length())
+    {
+      while (!lineStr.isEmpty() && getStringWidth(lineStr + "...") > max_width)
+      {
+        unsigned int lastChar = 0;
+        for (unsigned int i = 0; i < lineStr.length();
+             i += utf8CharLength(lineStr, i))
+        {
+          lastChar = i;
+        }
+        lineStr.remove(lastChar);
+      }
+      lineStr += "...";
+    }
+
+    drawString(x, y + (line * line_spacing), lineStr, alignment, color);
+    start = end;
+  }
+  return;
+} // end drawCjkMultiLnString
+#endif
+
 /* Draws a string that will flow into the next line when max_width is reached.
  * If a string exceeds max_lines an ellipsis (...) will terminate the last word.
  * Lines will break at spaces(' ') and dashes('-').
@@ -138,6 +267,14 @@ void drawMultiLnString(int16_t x, int16_t y, const String &text,
                        uint16_t max_lines, int16_t line_spacing,
                        uint16_t color)
 {
+#if USE_CJK_TEXT
+  if (containsCjk(text))
+  {
+    drawCjkMultiLnString(x, y, text, alignment, max_width, max_lines,
+                         line_spacing, color);
+    return;
+  }
+#endif
   uint16_t current_line = 0;
   String textRemaining = text;
   // print until we reach max_lines or no more text remains
@@ -284,11 +421,11 @@ void drawCurrentSunrise(const owm_current_t &current)
                              wi_sunrise_48x48, 48, 48, GxEPD_BLACK);
 
   // labels
-  display.setFont(&FONT_7pt8b);
+  setFont(&FONT_7pt8b);
   drawString(48 + (162 * PosX), 204 + 10 + (48 + 8) * PosY, TXT_SUNRISE, LEFT);
 
   // sunrise
-  display.setFont(&FONT_12pt8b);
+  setFont(&FONT_12pt8b);
   char timeBuffer[12] = {}; // big enough to accommodate "hh:mm:ss am"
   time_t ts = current.sunrise;
   tm *timeInfo = localtime(&ts);
@@ -313,11 +450,11 @@ void drawCurrentWind(const owm_current_t &current)
                              wi_strong_wind_48x48, 48, 48, GxEPD_BLACK);
 
   // labels
-  display.setFont(&FONT_7pt8b);
+  setFont(&FONT_7pt8b);
   drawString(48 + (162 * PosX), 204 + 10 + (48 + 8) * PosY, TXT_WIND, LEFT);
 
   // wind
-  display.setFont(&FONT_12pt8b);
+  setFont(&FONT_12pt8b);
 #ifdef WIND_INDICATOR_ARROW
   display.drawInvertedBitmap(48 + (162 * PosX), 204 + 24 / 2 + (48 + 8) * PosY,
                              getWindBitmap24(current.wind_deg),
@@ -357,13 +494,13 @@ void drawCurrentWind(const owm_current_t &current)
 #else
   drawString(48    + (162 * PosX) , 204 + 17 / 2 + (48 + 8) * PosY + 48 / 2, dataStr, LEFT);
 #endif
-  display.setFont(&FONT_8pt8b);
+  setFont(&FONT_8pt8b);
   drawString(display.getCursorX(), 204 + 17 / 2 + (48 + 8) * PosY + 48 / 2,
              unitStr, LEFT);
 
 #if defined(WIND_INDICATOR_NUMBER)
   dataStr = String(current.wind_deg) + "\260";
-  display.setFont(&FONT_12pt8b);
+  setFont(&FONT_12pt8b);
   drawString(display.getCursorX() + 6, 204 + 17 / 2 + (48 + 8) * PosY + 48 / 2,
              dataStr, LEFT);
 #endif
@@ -372,7 +509,7 @@ void drawCurrentWind(const owm_current_t &current)
  || defined(WIND_INDICATOR_CPN_SECONDARY_INTERCARDINAL) \
  || defined(WIND_INDICATOR_CPN_TERTIARY_INTERCARDINAL)
   dataStr = getCompassPointNotation(current.wind_deg);
-  display.setFont(&FONT_12pt8b);
+  setFont(&FONT_12pt8b);
   drawString(display.getCursorX() + 6, 204 + 17 / 2 + (48 + 8) * PosY + 48 / 2,
              dataStr, LEFT);
 #endif
@@ -395,19 +532,19 @@ void drawCurrentUVI(const owm_current_t &current)
                              wi_day_sunny_48x48, 48, 48, GxEPD_BLACK);
 
   // labels
-  display.setFont(&FONT_7pt8b);
+  setFont(&FONT_7pt8b);
   drawString(48 + (162 * PosX), 204 + 10 + (48 + 8) * PosY, TXT_UV_INDEX, LEFT);
 
   // spacing between end of index value and start of descriptor text
   const int sp = 8;
 
   // uv index
-  display.setFont(&FONT_12pt8b);
+  setFont(&FONT_12pt8b);
   unsigned int uvi = static_cast<unsigned int>(
                                 std::max(std::round(current.uvi), 0.0f));
   dataStr = String(uvi);
   drawString(48 + (162 * PosX), 204 + 17 / 2 + (48 + 8) * PosY + 48 / 2, dataStr, LEFT);
-  display.setFont(&FONT_7pt8b);
+  setFont(&FONT_7pt8b);
   dataStr = String(getUVIdesc(uvi));
   int max_w = (162 + (PosX * 162) - sp) - (display.getCursorX() + sp);
   if (getStringWidth(dataStr) <= max_w)
@@ -417,7 +554,7 @@ void drawCurrentUVI(const owm_current_t &current)
   }
   else
   { // use smaller font
-    display.setFont(&FONT_5pt8b);
+    setFont(&FONT_5pt8b);
     if (getStringWidth(dataStr) <= max_w)
     { // Fits on a single line with smaller font, draw along bottom
       drawString(display.getCursorX() + sp,
@@ -449,7 +586,7 @@ void drawCurrentAirQuality(const owm_resp_air_pollution_t &owm_air_pollution)
                              air_filter_48x48, 48, 48, GxEPD_BLACK);
 
   // labels
-  display.setFont(&FONT_7pt8b);
+  setFont(&FONT_7pt8b);
 
   const char *air_quality_index_label;
   if (aqi_desc_type(AQI_SCALE) == AIR_QUALITY_DESC)
@@ -466,7 +603,7 @@ void drawCurrentAirQuality(const owm_resp_air_pollution_t &owm_air_pollution)
   const int sp = 8;
 
   // air quality index
-  display.setFont(&FONT_12pt8b);
+  setFont(&FONT_12pt8b);
   const owm_components_t &c = owm_air_pollution.components;
   // OpenWeatherMap does not provide pb (lead) conentrations, so we pass NULL.
   int aqi = calc_aqi(AQI_SCALE, c.co, c.nh3, c.no, c.no2, c.o3, NULL, c.so2,
@@ -481,7 +618,7 @@ void drawCurrentAirQuality(const owm_resp_air_pollution_t &owm_air_pollution)
     dataStr = String(aqi);
   }
   drawString(48 + (162 * PosX), 204 + 17 / 2 + (48 + 8) * PosY + 48 / 2, dataStr, LEFT);
-  display.setFont(&FONT_7pt8b);
+  setFont(&FONT_7pt8b);
   dataStr = String(aqi_desc(AQI_SCALE, aqi));
   int max_w = (162 + (PosX * 162) - sp) - (display.getCursorX() + sp);
   if (getStringWidth(dataStr) <= max_w)
@@ -491,7 +628,7 @@ void drawCurrentAirQuality(const owm_resp_air_pollution_t &owm_air_pollution)
   }
   else
   { // use smaller font
-    display.setFont(&FONT_5pt8b);
+    setFont(&FONT_5pt8b);
     if (getStringWidth(dataStr) <= max_w)
     { // Fits on a single line with smaller font, draw along bottom
       drawString(display.getCursorX() + sp,
@@ -524,11 +661,11 @@ void drawCurrentInTemp(float inTemp)
                              house_thermometer_48x48, 48, 48, GxEPD_BLACK);
 
   // labels
-  display.setFont(&FONT_7pt8b);
+  setFont(&FONT_7pt8b);
   drawString(48 + (162 * PosX), 204 + 10 + (48 + 8) * PosY, TXT_INDOOR_TEMPERATURE, LEFT);
 
   // indoor temperature
-  display.setFont(&FONT_12pt8b);
+  setFont(&FONT_12pt8b);
   if (!std::isnan(inTemp))
   {
 #ifdef UNITS_TEMP_KELVIN
@@ -567,11 +704,11 @@ void drawCurrentSunset(const owm_current_t &current)
                              wi_sunset_48x48, 48, 48, GxEPD_BLACK);
 
   // labels
-  display.setFont(&FONT_7pt8b);
+  setFont(&FONT_7pt8b);
   drawString(48 + (162 * PosX), 204 + 10 + (48 + 8) * PosY, TXT_SUNSET, LEFT);
 
   // sunset
-  display.setFont(&FONT_12pt8b);
+  setFont(&FONT_12pt8b);
   char timeBuffer[12] = {}; // big enough to accommodate "hh:mm:ss am"
   time_t ts = current.sunset;
   tm *timeInfo = localtime(&ts);
@@ -596,14 +733,14 @@ void drawCurrentHumidity(const owm_current_t &current)
                              wi_humidity_48x48, 48, 48, GxEPD_BLACK);
 
   // labels
-  display.setFont(&FONT_7pt8b);
+  setFont(&FONT_7pt8b);
   drawString(48 + (162 * PosX), 204 + 10 + (48 + 8) * PosY, TXT_HUMIDITY, LEFT);
 
   // humidity
-  display.setFont(&FONT_12pt8b);
+  setFont(&FONT_12pt8b);
   dataStr = String(current.humidity);
   drawString(48 + (162 * PosX), 204 + 17 / 2 + (48 + 8) * PosY + 48 / 2, dataStr, LEFT);
-  display.setFont(&FONT_8pt8b);
+  setFont(&FONT_8pt8b);
   drawString(display.getCursorX(), 204 + 17 / 2 + (48 + 8) * PosY + 48 / 2,
              "%", LEFT);
   return;
@@ -623,7 +760,7 @@ void drawCurrentPressure(const owm_current_t &current)
                              wi_barometer_48x48, 48, 48, GxEPD_BLACK);
 
   //  labels
-  display.setFont(&FONT_7pt8b);
+  setFont(&FONT_7pt8b);
   drawString(48 + (162 * PosX), 204 + 10 + (48 + 8) * PosY, TXT_PRESSURE, LEFT);
 
   // pressure
@@ -670,9 +807,9 @@ void drawCurrentPressure(const owm_current_t &current)
                    ) / 1e2f, 2);
   unitStr = String(" ") + TXT_UNITS_PRES_POUNDSPERSQUAREINCH;
 #endif
-  display.setFont(&FONT_12pt8b);
+  setFont(&FONT_12pt8b);
   drawString(48 + (162 * PosX), 204 + 17 / 2 + (48 + 8) * PosY + 48 / 2, dataStr, LEFT);
-  display.setFont(&FONT_8pt8b);
+  setFont(&FONT_8pt8b);
   drawString(display.getCursorX(), 204 + 17 / 2 + (48 + 8) * PosY + 48 / 2,
              unitStr, LEFT);
 
@@ -694,11 +831,11 @@ void drawCurrentVisibility(const owm_current_t &current)
                              visibility_icon_48x48, 48, 48, GxEPD_BLACK);
 
   // labels
-  display.setFont(&FONT_7pt8b);
+  setFont(&FONT_7pt8b);
   drawString(48 + (162 * PosX), 204 + 10 + (48 + 8) * PosY, TXT_VISIBILITY, LEFT);
 
   // visibility
-  display.setFont(&FONT_12pt8b);
+  setFont(&FONT_12pt8b);
 #ifdef UNITS_DIST_KILOMETERS
   float vis = meters_to_kilometers(current.visibility);
   unitStr = String(" ") + TXT_UNITS_DIST_KILOMETERS;
@@ -728,7 +865,7 @@ void drawCurrentVisibility(const owm_current_t &current)
     dataStr = "> " + dataStr;
   }
   drawString(48 + (162 * PosX), 204 + 17 / 2 + (48 + 8) * PosY + 48 / 2, dataStr, LEFT);
-  display.setFont(&FONT_8pt8b);
+  setFont(&FONT_8pt8b);
   drawString(display.getCursorX(), 204 + 17 / 2 + (48 + 8) * PosY + 48 / 2,
              unitStr, LEFT);
 
@@ -750,11 +887,11 @@ void drawCurrentInHumidity(float inHumidity)
                              house_humidity_48x48, 48, 48, GxEPD_BLACK);
 
   // current weather data labels
-  display.setFont(&FONT_7pt8b);
+  setFont(&FONT_7pt8b);
   drawString(48 + (162 * PosX), 204 + 10 + (48 + 8) * PosY, TXT_INDOOR_HUMIDITY, LEFT);
 
   // indoor humidity
-  display.setFont(&FONT_12pt8b);
+  setFont(&FONT_12pt8b);
   if (!std::isnan(inHumidity))
   {
     dataStr = String(static_cast<int>(std::round(inHumidity)));
@@ -764,7 +901,7 @@ void drawCurrentInHumidity(float inHumidity)
     dataStr = "--";
   }
   drawString(48 + (162 * PosX), 204 + 17 / 2 + (48 + 8) * PosY + 48 / 2, dataStr, LEFT);
-  display.setFont(&FONT_8pt8b);
+  setFont(&FONT_8pt8b);
   drawString(display.getCursorX(), 204 + 17 / 2 + (48 + 8) * PosY + 48 / 2,
              "%", LEFT);
   return;
@@ -785,11 +922,11 @@ void drawCurrentMoonrise(const owm_daily_t &today)
                              wi_moonrise_48x48, 48, 48, GxEPD_BLACK);
 
   // labels
-  display.setFont(&FONT_7pt8b);
+  setFont(&FONT_7pt8b);
   drawString(48 + (162 * PosX), 204 + 10 + (48 + 8) * PosY, TXT_MOONRISE, LEFT);
 
   // moonrise
-  display.setFont(&FONT_12pt8b);
+  setFont(&FONT_12pt8b);
   char timeBuffer[12] = {}; // big enough to accommodate "hh:mm:ss am"
   time_t ts = today.moonrise;
   tm *timeInfo = localtime(&ts);
@@ -813,11 +950,11 @@ void drawCurrentMoonset(const owm_daily_t &today)
                              wi_moonset_48x48, 48, 48, GxEPD_BLACK);
 
   // labels
-  display.setFont(&FONT_7pt8b);
+  setFont(&FONT_7pt8b);
   drawString(48 + (162 * PosX), 204 + 10 + (48 + 8) * PosY, TXT_MOONSET, LEFT);
 
   // moonset
-  display.setFont(&FONT_12pt8b);
+  setFont(&FONT_12pt8b);
   char timeBuffer[12] = {}; // big enough to accommodate "hh:mm:ss am"
   time_t ts = today.moonset;
   tm *timeInfo = localtime(&ts);
@@ -842,7 +979,7 @@ void drawCurrentMoonphase(const owm_daily_t &daily)
                              getMoonPhaseBitmap48(daily), 48, 48, GxEPD_BLACK);
 
   // labels
-  display.setFont(&FONT_7pt8b);
+  setFont(&FONT_7pt8b);
   drawString(48 + (162 * PosX), 204 + 10 + (48 + 8) * PosY, TXT_MOONPHASE, LEFT);
 
   // moonphase
@@ -856,7 +993,7 @@ void drawCurrentMoonphase(const owm_daily_t &daily)
   }
   else
   { // use smaller font
-    display.setFont(&FONT_5pt8b);
+    setFont(&FONT_5pt8b);
     if (getStringWidth(dataStr) <= max_w)
     { // Fits on a single line with smaller font, draw along bottom
       drawString(48 + (162 * PosX),
@@ -891,11 +1028,11 @@ void drawCurrentDewpoint(const owm_current_t &current)
                              wi_raindrops_24x24, 24, 24, GxEPD_BLACK);
   
   // labels
-  display.setFont(&FONT_7pt8b);
+  setFont(&FONT_7pt8b);
   drawString(48 + (162 * PosX), 204 + 10 + (48 + 8) * PosY, TXT_DEWPOINT, LEFT);
 
   // Dew point
-  display.setFont(&FONT_12pt8b);
+  setFont(&FONT_12pt8b);
   if (!std::isnan(current.dew_point))
   {
 #ifdef UNITS_TEMP_KELVIN
@@ -955,13 +1092,13 @@ void drawCurrentConditions(const owm_current_t &current,
 #endif
   // FONT_**_temperature fonts only have the character set used for displaying
   // temperature (0123456789.-\260)
-  display.setFont(&FONT_48pt8b_temperature);
+  setFont(&FONT_48pt8b_temperature);
 #ifndef DISP_BW_V1
     drawString(196 + 164 / 2 - 20, 196 / 2 + 69 / 2, dataStr, CENTER);
 #elif defined(DISP_BW_V1)
     drawString(156 + 164 / 2 - 20, 196 / 2 + 69 / 2, dataStr, CENTER);
 #endif
-  display.setFont(&FONT_14pt8b);
+  setFont(&FONT_14pt8b);
   drawString(display.getCursorX(), 196 / 2 - 69 / 2 + 20, unitStr, LEFT);
 
   // current feels like
@@ -981,7 +1118,7 @@ void drawCurrentConditions(const owm_current_t &current,
                      kelvin_to_fahrenheit(current.feels_like))))
             + '\260';
 #endif
-  display.setFont(&FONT_12pt8b);
+  setFont(&FONT_12pt8b);
 #ifndef DISP_BW_V1
   drawString(196 + 164 / 2, 98 + 69 / 2 + 12 + 17, dataStr, CENTER);
 #elif defined(DISP_BW_V1)
@@ -1072,14 +1209,14 @@ void drawForecast(const owm_daily_t *daily, tm timeInfo)
                                getDailyForecastBitmap64(daily[i]),
                                64, 64, GxEPD_BLACK);
     // day of week label
-    display.setFont(&FONT_11pt8b);
+    setFont(&FONT_11pt8b);
     char dayBuffer[8] = {};
     _strftime(dayBuffer, sizeof(dayBuffer), "%a", &timeInfo); // abbrv'd day
     drawString(x + 31 - 2, 98 + 69 / 2 - 32 - 26 - 6 + 16, dayBuffer, CENTER);
     timeInfo.tm_wday = (timeInfo.tm_wday + 1) % 7; // increment to next day
 
     // high | low
-    display.setFont(&FONT_8pt8b);
+    setFont(&FONT_8pt8b);
     drawString(x + 31, 98 + 69 / 2 + 38 - 6 + 12, "|", CENTER);
 #ifdef UNITS_TEMP_KELVIN
     hiStr = String(static_cast<int>(std::round(daily[i].temp.max)));
@@ -1142,7 +1279,7 @@ void drawForecast(const owm_daily_t *daily, tm timeInfo)
       if (dailyPrecip > 0.0f)
       {
 #endif
-        display.setFont(&FONT_6pt8b);
+        setFont(&FONT_6pt8b);
         drawString(x + 31, 98 + 69 / 2 + 38 - 6 + 26,
                    dataStr + unitStr, CENTER);
 #if (DISPLAY_DAILY_PRECIP == 2) // smart
@@ -1184,9 +1321,9 @@ void drawForecast(const owm_daily_t *daily, tm timeInfo)
 
   // limit alert text width so that is does not run into the location or date
   // strings
-  display.setFont(&FONT_16pt8b);
+  setFont(&FONT_16pt8b);
   int city_w = getStringWidth(city);
-  display.setFont(&FONT_12pt8b);
+  setFont(&FONT_12pt8b);
   int date_w = getStringWidth(date);
   int max_w = DISP_WIDTH - 2 - std::max(city_w, date_w) - (196 + 4) - 8;
 
@@ -1221,14 +1358,14 @@ void drawForecast(const owm_daily_t *daily, tm timeInfo)
     // must be called after getAlertBitmap
     toTitleCase(cur_alert.event);
 
-    display.setFont(&FONT_14pt8b);
+    setFont(&FONT_14pt8b);
     if (getStringWidth(cur_alert.event) <= max_w)
     { // Fits on a single line, draw along bottom
       drawString(196 + 48 + 4, 24 + 8 - 12 + 20 + 1, cur_alert.event, LEFT);
     }
     else
     { // use smaller font
-      display.setFont(&FONT_12pt8b);
+      setFont(&FONT_12pt8b);
       if (getStringWidth(cur_alert.event) <= max_w)
       { // Fits on a single line with smaller font, draw along bottom
         drawString(196 + 48 + 4, 24 + 8 - 12 + 17 + 1, cur_alert.event, LEFT);
@@ -1245,7 +1382,7 @@ void drawForecast(const owm_daily_t *daily, tm timeInfo)
     // adjust max width to for 32x32 icons
     max_w -= 32;
 
-    display.setFont(&FONT_12pt8b);
+    setFont(&FONT_12pt8b);
     for (int i = 0; i < 2; ++i)
     {
       owm_alerts_t &cur_alert = alerts[alert_indices[i]];
@@ -1272,9 +1409,9 @@ void drawForecast(const owm_daily_t *daily, tm timeInfo)
 void drawLocationDate(const String &city, const String &date)
 {
   // location, date
-  display.setFont(&FONT_16pt8b);
+  setFont(&FONT_16pt8b);
   drawString(DISP_WIDTH - 2, 23, city, RIGHT, ACCENT_COLOR);
-  display.setFont(&FONT_12pt8b);
+  setFont(&FONT_12pt8b);
   drawString(DISP_WIDTH - 2, 30 + 4 + 17, date, RIGHT);
   return;
 } // end drawLocationDate
@@ -1465,7 +1602,7 @@ void drawOutlookGraph(const owm_hourly_t *hourly, const owm_daily_t *daily,
   {
     String dataStr;
     int yTick = static_cast<int>(yPos0 + (i * yInterval));
-    display.setFont(&FONT_8pt8b);
+    setFont(&FONT_8pt8b);
     // Temperature
     dataStr = String(tempBoundMax - (i * yTempMajorTicks));
 #if defined(UNITS_TEMP_CELSIUS) || defined(UNITS_TEMP_FAHRENHEIT)
@@ -1497,7 +1634,7 @@ void drawOutlookGraph(const owm_hourly_t *hourly, const owm_daily_t *daily,
 #endif
 
       drawString(xPos1 + 8, yTick + 4, dataStr, LEFT);
-      display.setFont(&FONT_5pt8b);
+      setFont(&FONT_5pt8b);
       drawString(display.getCursorX(), yTick + 4, precipUnit, LEFT);
     } // end draw labels if precip is >0
 
@@ -1515,7 +1652,7 @@ void drawOutlookGraph(const owm_hourly_t *hourly, const owm_daily_t *daily,
   int hourInterval = static_cast<int>(ceil(HOURLY_GRAPH_MAX
                                            / static_cast<float>(xMaxTicks)));
   float xInterval = (xPos1 - xPos0 - 1) / static_cast<float>(HOURLY_GRAPH_MAX);
-  display.setFont(&FONT_8pt8b);
+  setFont(&FONT_8pt8b);
 
   // precalculate all x and y coordinates for temperature values
   float yPxPerUnit = (yPos1 - yPos0)
@@ -1534,7 +1671,7 @@ void drawOutlookGraph(const owm_hourly_t *hourly, const owm_daily_t *daily,
 #if DISPLAY_HOURLY_ICONS
   int day_idx = 0;
 #endif
-  display.setFont(&FONT_8pt8b);
+  setFont(&FONT_8pt8b);
   for (int i = 0; i < HOURLY_GRAPH_MAX; ++i)
   {
     int xTick = static_cast<int>(xPos0 + (i * xInterval));
@@ -1660,7 +1797,7 @@ void drawStatusBar(const String &statusStr, const String &refreshTimeStr,
 {
   String dataStr;
   uint16_t dataColor = GxEPD_BLACK;
-  display.setFont(&FONT_6pt8b);
+  setFont(&FONT_6pt8b);
   int pos = DISP_WIDTH - 2;
   const int sp = 2;
 
@@ -1743,7 +1880,7 @@ void drawStatusBar(const String &statusStr, const String &refreshTimeStr,
 void drawError(const uint8_t *bitmap_196x196,
                const String &errMsgLn1, const String &errMsgLn2)
 {
-  display.setFont(&FONT_26pt8b);
+  setFont(&FONT_26pt8b);
   if (!errMsgLn2.isEmpty())
   {
     drawString(DISP_WIDTH / 2,
