@@ -368,15 +368,15 @@ void drawMultiLnString(int16_t x, int16_t y, const String &text,
 
 /* Initialize e-paper display
  */
-void initDisplay()
+void initDisplay(bool initialRefresh)
 {
   pinMode(PIN_EPD_PWR, OUTPUT);
   digitalWrite(PIN_EPD_PWR, HIGH);
 #ifdef DRIVER_WAVESHARE
-  display.init(115200, true, 2, false);
+  display.init(115200, initialRefresh, 2, false);
 #endif
 #ifdef DRIVER_DESPI_C02
-  display.init(115200, true, 10, false);
+  display.init(115200, initialRefresh, 10, false);
 #endif
   // remap spi
   SPI.end();
@@ -1790,11 +1790,120 @@ void drawOutlookGraph(const owm_hourly_t *hourly, const owm_daily_t *daily,
   return;
 } // end drawOutlookGraph
 
+#if BATTERY_MONITORING
+/* Returns the battery indicator text, e.g. "57%" or "57% (3.80v)".
+ */
+static String getBatteryText(uint32_t batVoltage)
+{
+  String text;
+#if STATUS_BAR_EXTRAS_BAT_PERCENTAGE
+  text += String(calcBatPercent(batVoltage, MIN_BATTERY_VOLTAGE,
+                                MAX_BATTERY_VOLTAGE)) + "%";
+#endif
+#if STATUS_BAR_EXTRAS_BAT_VOLTAGE
+  text += " (" + String(std::round(batVoltage / 10.f) / 100.f, 2) + "v)";
+#endif
+  return text;
+} // end getBatteryText
+
+/* Returns the left edge of the battery indicator in the status bar. Its width
+ * is fixed (sized for the widest text), so the rest of the status bar does not
+ * move as the percentage changes, and the indicator can be redrawn alone.
+ */
+static int16_t getBatteryIndicatorLeft()
+{
+  int16_t textWidth = 0;
+#if STATUS_BAR_EXTRAS_BAT_PERCENTAGE || STATUS_BAR_EXTRAS_BAT_VOLTAGE
+  int16_t x1, y1;
+  uint16_t w, h;
+  setFont(&FONT_6pt8b);
+  display.getTextBounds(getBatteryText(MAX_BATTERY_VOLTAGE), 0, 0,
+                        &x1, &y1, &w, &h);
+  textWidth = w + 1;
+#endif
+  return DISP_WIDTH - 2 - textWidth - 24;
+} // end getBatteryIndicatorLeft
+
+/* Draws the battery icon at left, followed by the battery text, onto gfx.
+ * bottom is the bottom row of the status bar in gfx coordinates.
+ */
+static void drawBatteryIndicator(Adafruit_GFX &gfx, int16_t left,
+                                 int16_t bottom, uint32_t batVoltage,
+                                 bool charging)
+{
+  uint16_t color = GxEPD_BLACK;
+#if defined(DISP_3C_B) || defined(DISP_7C_F)
+  if (batVoltage < WARN_BATTERY_VOLTAGE)
+  {
+    color = ACCENT_COLOR;
+  }
+#endif
+  const uint32_t batPercent = calcBatPercent(batVoltage, MIN_BATTERY_VOLTAGE,
+                                             MAX_BATTERY_VOLTAGE);
+  // icons are stored inverted: 0 bits are drawn
+  gfx.drawBitmap(left, bottom - 17,
+                 charging ? battery_charging_full_90deg_24x24
+                          : getBatBitmap24(batPercent),
+                 24, 24, GxEPD_WHITE, color);
+#if STATUS_BAR_EXTRAS_BAT_PERCENTAGE || STATUS_BAR_EXTRAS_BAT_VOLTAGE
+  gfx.setFont(&FONT_6pt8b);
+  gfx.setTextColor(color);
+  gfx.setCursor(left + 24 + 1, bottom - 2);
+  gfx.print(getBatteryText(batVoltage));
+#endif
+  return;
+} // end drawBatteryIndicator
+
+#ifdef HAS_BATTERY_INDICATOR_UPDATE
+/* Redraws only the battery indicator using a fast partial refresh, without
+ * touching the rest of the screen.
+ *
+ * This panel's fast refresh always drives the whole screen, comparing the
+ * controller's "previous" and "current" buffers and leaving pixels alone
+ * where they match. The controller loses both buffers while hibernating, so
+ * first make them equal everywhere, then write the indicator as currently
+ * shown (old*) to "previous" and the new one to "current".
+ */
+void updateBatteryIndicator(uint32_t oldVoltage, bool oldCharging,
+                            uint32_t newVoltage, bool newCharging)
+{
+  initDisplay(false);
+  static uint8_t white[DISP_WIDTH / 8 * 8]; // 8 rows
+  memset(white, 0xFF, sizeof(white));
+  for (int16_t row = 0; row < DISP_HEIGHT; row += 8)
+  {
+    display.epd2.writeImageToPrevious(white, 0, row, DISP_WIDTH, 8);
+    display.epd2.writeImage(white, 0, row, DISP_WIDTH, 8);
+  }
+
+  const int16_t left = getBatteryIndicatorLeft();
+  const int16_t x = left - left % 8; // controller needs multiples of 8
+  const int16_t y = DISP_HEIGHT - 24;
+  const int16_t w = DISP_WIDTH - x;
+  const int16_t h = DISP_HEIGHT - y;
+  // GFXcanvas1 bits: 1 = GxEPD_WHITE, 0 = GxEPD_BLACK, as the controller
+  GFXcanvas1 canvas(w, h);
+  canvas.setTextWrap(false);
+
+  canvas.fillScreen(GxEPD_WHITE);
+  drawBatteryIndicator(canvas, left - x, h - 1, oldVoltage, oldCharging);
+  display.epd2.writeImageToPrevious(canvas.getBuffer(), x, y, w, h);
+
+  canvas.fillScreen(GxEPD_WHITE);
+  drawBatteryIndicator(canvas, left - x, h - 1, newVoltage, newCharging);
+  display.epd2.writeImage(canvas.getBuffer(), x, y, w, h);
+  display.epd2.refresh(x, y, w, h);
+  powerOffDisplay();
+  return;
+} // end updateBatteryIndicator
+#endif
+#endif
+
 /* This function is responsible for drawing the status bar along the bottom of
  * the display.
  */
 void drawStatusBar(const String &statusStr, const String &refreshTimeStr,
-                   int rssi, uint32_t batVoltage)
+                   int rssi, uint32_t batVoltage, bool charging)
 {
   String dataStr;
   uint16_t dataColor = GxEPD_BLACK;
@@ -1803,30 +1912,8 @@ void drawStatusBar(const String &statusStr, const String &refreshTimeStr,
   const int sp = 2;
 
 #if BATTERY_MONITORING
-  // battery - (expecting 3.7v LiPo)
-  uint32_t batPercent = calcBatPercent(batVoltage,
-                                       MIN_BATTERY_VOLTAGE,
-                                       MAX_BATTERY_VOLTAGE);
-#if defined(DISP_3C_B) || defined(DISP_7C_F)
-  if (batVoltage < WARN_BATTERY_VOLTAGE)
-  {
-    dataColor = ACCENT_COLOR;
-  }
-#endif
-#if STATUS_BAR_EXTRAS_BAT_PERCENTAGE || STATUS_BAR_EXTRAS_BAT_VOLTAGE
-  dataStr = "";
-#if STATUS_BAR_EXTRAS_BAT_PERCENTAGE
-  dataStr += String(batPercent) + "%";
-#endif
-#if STATUS_BAR_EXTRAS_BAT_VOLTAGE
-  dataStr += " (" + String( std::round(batVoltage / 10.f) / 100.f, 2 ) + "v)";
-#endif
-  drawString(pos, DISP_HEIGHT - 1 - 2, dataStr, RIGHT, dataColor);
-  pos -= getStringWidth(dataStr) + 1;
-#endif
-  pos -= 24;
-  display.drawInvertedBitmap(pos, DISP_HEIGHT - 1 - 17,
-                             getBatBitmap24(batPercent), 24, 24, dataColor);
+  pos = getBatteryIndicatorLeft();
+  drawBatteryIndicator(display, pos, DISP_HEIGHT - 1, batVoltage, charging);
   pos -= sp + 9;
 #endif
 

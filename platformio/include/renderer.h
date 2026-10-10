@@ -76,7 +76,7 @@ void drawMultiLnString(int16_t x, int16_t y, const String &text,
                        alignment_t alignment, uint16_t max_width,
                        uint16_t max_lines, int16_t line_spacing,
                        uint16_t color=GxEPD_BLACK);
-void initDisplay();
+void initDisplay(bool initialRefresh=true);
 void powerOffDisplay();
 void drawCurrentConditions(const owm_current_t &current,
                            const owm_daily_t &today,
@@ -89,9 +89,15 @@ void drawLocationDate(const String &city, const String &date);
 void drawOutlookGraph(const owm_hourly_t *hourly, const owm_daily_t *daily,
                       tm timeInfo);
 void drawStatusBar(const String &statusStr, const String &refreshTimeStr,
-                   int rssi, uint32_t batVoltage);
+                   int rssi, uint32_t batVoltage, bool charging=false);
 void drawError(const uint8_t *bitmap_196x196,
                const String &errMsgLn1, const String &errMsgLn2="");
+#if BATTERY_MONITORING && defined(DISP_BW_V2)
+  // panels whose driver supports writing the previous image for partial update
+  #define HAS_BATTERY_INDICATOR_UPDATE
+void updateBatteryIndicator(uint32_t oldVoltage, bool oldCharging,
+                            uint32_t newVoltage, bool newCharging);
+#endif
 void drawSetupScreen(const String &qrText, const String &title,
                      const String lines[], int lineCount);
 void drawCurrentSunrise(const owm_current_t &current);

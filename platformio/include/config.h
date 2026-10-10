@@ -322,6 +322,8 @@
 
 // Set the below constants in "config.cpp"
 extern const uint8_t PIN_BAT_ADC;
+extern const uint8_t PIN_USB_SENSE;
+extern const uint8_t PIN_USB_WAKE;
 extern const uint8_t PIN_EPD_BUSY;
 extern const uint8_t PIN_EPD_CS;
 extern const uint8_t PIN_EPD_RST;
@@ -362,6 +364,7 @@ extern const uint32_t VERY_LOW_BATTERY_VOLTAGE;
 extern const uint32_t CRIT_LOW_BATTERY_VOLTAGE;
 extern const unsigned long LOW_BATTERY_SLEEP_INTERVAL;
 extern const unsigned long VERY_LOW_BATTERY_SLEEP_INTERVAL;
+extern const unsigned long CRIT_LOW_BATTERY_SLEEP_INTERVAL;
 extern const uint32_t MAX_BATTERY_VOLTAGE;
 extern const uint32_t MIN_BATTERY_VOLTAGE;
 

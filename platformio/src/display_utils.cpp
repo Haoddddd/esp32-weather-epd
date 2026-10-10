@@ -19,6 +19,7 @@
 #include <vector>
 #include <Arduino.h>
 #include <driver/adc.h>
+#include <driver/rtc_io.h>
 #include <esp_adc_cal.h>
 
 #include <aqi.h>
@@ -31,6 +32,43 @@
 
 // icon header files
 #include "icons/icons.h"
+
+/* Returns true if the board is powered over USB.
+ *
+ * The USB-to-serial chip is powered only by USB, and its TX line (connected to
+ * PIN_USB_SENSE) idles high while it is powered. Without USB the pull-down
+ * reads low. Must be called before Serial.begin(), which reconfigures the pin.
+ */
+bool isUsbPowered()
+{
+  pinMode(PIN_USB_SENSE, INPUT_PULLDOWN);
+  delay(1);
+  return digitalRead(PIN_USB_SENSE) == HIGH;
+} // end isUsbPowered
+
+/* Arms a wake from deep sleep on the next change of USB power, so the display
+ * updates right away when USB is connected or disconnected. Needs a jumper
+ * from PIN_USB_SENSE to PIN_USB_WAKE; if USB is powered but PIN_USB_WAKE reads
+ * low, the jumper is missing and no wake is armed (it would fire at once).
+ */
+void enableUsbWakeup(bool usbPowered)
+{
+  const gpio_num_t pin = static_cast<gpio_num_t>(PIN_USB_WAKE);
+  rtc_gpio_deinit(pin);
+  pinMode(PIN_USB_WAKE, INPUT_PULLDOWN);
+  delay(1);
+  if (usbPowered && digitalRead(PIN_USB_WAKE) == LOW)
+  {
+    Serial.println("USB wake not armed: no jumper on wake pin");
+    return;
+  }
+  esp_sleep_enable_ext0_wakeup(pin, usbPowered ? 0 : 1);
+  Serial.println(usbPowered ? "USB wake armed: on disconnect"
+                            : "USB wake armed: on connect");
+  rtc_gpio_pullup_dis(pin);
+  rtc_gpio_pulldown_en(pin);
+  return;
+} // end enableUsbWakeup
 
 /* Returns battery voltage in millivolts (mv).
  */

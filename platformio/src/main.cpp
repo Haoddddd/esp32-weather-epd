@@ -51,6 +51,15 @@ static owm_resp_onecall_t       owm_onecall;
 static owm_resp_air_pollution_t owm_air_pollution;
 
 Preferences prefs;
+// whether USB power was present at boot
+static bool usbPowered = false;
+
+// Kept in RTC memory across deep sleep, to redraw only the battery indicator
+// when woken by USB being connected or disconnected.
+RTC_DATA_ATTR static bool rtcBatteryShown = false; // weather screen on display
+RTC_DATA_ATTR static uint32_t rtcShownBatVoltage;
+RTC_DATA_ATTR static bool rtcShownCharging;
+RTC_DATA_ATTR static time_t rtcNextWake;           // scheduled refresh
 
 /* Put esp32 into ultra low-power deep sleep (<11μA).
  * Aligns wake time to the minute. Sleep times defined in config.cpp.
@@ -118,6 +127,8 @@ void beginDeepSleep(unsigned long startTime, tm *timeInfo)
 #endif
 
   esp_sleep_enable_timer_wakeup(sleepDuration * 1000000ULL);
+  enableUsbWakeup(usbPowered);
+  rtcNextWake = time(nullptr) + sleepDuration;
   Serial.print(TXT_AWAKE_FOR);
   Serial.println(" "  + String((millis() - startTime) / 1000.0, 3) + "s");
   Serial.print(TXT_ENTERING_DEEP_SLEEP_FOR);
@@ -130,6 +141,7 @@ void beginDeepSleep(unsigned long startTime, tm *timeInfo)
 void setup()
 {
   unsigned long startTime = millis();
+  usbPowered = isUsbPowered();
   Serial.begin(115200);
 
 #if DEBUG_LEVEL >= 1
@@ -152,8 +164,40 @@ void setup()
   // make use of non-volatile storage.
   bool lowBat = prefs.getBool("lowBat", false);
 
+#ifdef HAS_BATTERY_INDICATOR_UPDATE
+  // woken by USB being connected or disconnected: just update the battery
+  // indicator, then sleep until the scheduled refresh
+  if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT0 && rtcBatteryShown
+   && (usbPowered || batteryVoltage > LOW_BATTERY_VOLTAGE))
+  {
+    Serial.println(usbPowered ? "USB connected" : "USB disconnected");
+    updateBatteryIndicator(rtcShownBatVoltage, rtcShownCharging,
+                           batteryVoltage, usbPowered);
+    rtcShownBatVoltage = batteryVoltage;
+    rtcShownCharging = usbPowered;
+    prefs.end();
+    const time_t now = time(nullptr);
+    const uint64_t sleepSeconds = rtcNextWake > now + 60
+                                ? rtcNextWake - now : 60;
+    esp_sleep_enable_timer_wakeup(sleepSeconds * 1000000ULL);
+    enableUsbWakeup(usbPowered);
+    Serial.print(TXT_AWAKE_FOR);
+    Serial.println(" " + String((millis() - startTime) / 1000.0, 3) + "s");
+    Serial.print(TXT_ENTERING_DEEP_SLEEP_FOR);
+    Serial.println(" " + String(sleepSeconds) + "s");
+    esp_deep_sleep_start();
+  }
+#endif
+  // the weather screen is only known to be shown once it has been drawn
+  rtcBatteryShown = false;
+
+  if (usbPowered)
+  {
+    Serial.println("USB power detected, skipping low battery protection");
+  }
+
   // low battery, deep sleep now
-  if (batteryVoltage <= LOW_BATTERY_VOLTAGE)
+  if (batteryVoltage <= LOW_BATTERY_VOLTAGE && !usbPowered)
   {
     if (lowBat == false)
     { // battery is now low for the first time
@@ -168,11 +212,12 @@ void setup()
     }
 
     if (batteryVoltage <= CRIT_LOW_BATTERY_VOLTAGE)
-    { // critically low battery
-      // don't set esp_sleep_enable_timer_wakeup();
-      // We won't wake up again until someone manually presses the RST button.
+    { // critically low battery, only check occasionally for charging
+      esp_sleep_enable_timer_wakeup(CRIT_LOW_BATTERY_SLEEP_INTERVAL
+                                    * 60ULL * 1000000ULL);
       Serial.println(TXT_CRIT_LOW_BATTERY_VOLTAGE);
-      Serial.println(TXT_HIBERNATING_INDEFINITELY_NOTICE);
+      Serial.print(TXT_ENTERING_DEEP_SLEEP_FOR);
+      Serial.println(" " + String(CRIT_LOW_BATTERY_SLEEP_INTERVAL) + "min");
     }
     else if (batteryVoltage <= VERY_LOW_BATTERY_VOLTAGE)
     { // very low battery
@@ -190,6 +235,7 @@ void setup()
       Serial.print(TXT_ENTERING_DEEP_SLEEP_FOR);
       Serial.println(" " + String(LOW_BATTERY_SLEEP_INTERVAL) + "min");
     }
+    enableUsbWakeup(usbPowered);
     esp_deep_sleep_start();
   }
   // battery is no longer low, reset variable in non-volatile storage
@@ -362,9 +408,15 @@ void setup()
 #if DISPLAY_ALERTS
     drawAlerts(owm_onecall.alerts, settings.city, dateStr);
 #endif
-    drawStatusBar(statusStr, refreshTimeStr, wifiRSSI, batteryVoltage);
+    drawStatusBar(statusStr, refreshTimeStr, wifiRSSI, batteryVoltage,
+                  usbPowered);
   } while (display.nextPage());
   powerOffDisplay();
+#if BATTERY_MONITORING
+  rtcBatteryShown = true;
+  rtcShownBatVoltage = batteryVoltage;
+  rtcShownCharging = usbPowered;
+#endif
 
   // DEEP SLEEP
   beginDeepSleep(startTime, &timeInfo);

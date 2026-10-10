@@ -33,6 +33,15 @@
 //
 // ADC pin used to measure battery voltage
 const uint8_t PIN_BAT_ADC  = A2; // A0 for micro-usb firebeetle
+// Pin used to detect USB power: UART0 RX, driven high by the USB-to-serial
+// chip, which is only powered while USB is connected. While on USB power the
+// low battery protection is skipped, so the display keeps working while the
+// battery charges.
+const uint8_t PIN_USB_SENSE = 3;
+// RTC GPIO jumpered to PIN_USB_SENSE, used to wake from deep sleep as soon as
+// USB is connected or disconnected. Without the jumper, changes are picked up
+// at the next scheduled wake instead.
+const uint8_t PIN_USB_WAKE  = 25;
 // Pins for E-Paper Driver Board
 const uint8_t PIN_EPD_BUSY = 14; // 5 for micro-usb firebeetle
 const uint8_t PIN_EPD_CS   = 13;
@@ -147,15 +156,16 @@ const int HOURLY_GRAPH_MAX = 24;
 // To protect the battery upon LOW_BATTERY_VOLTAGE, the display will cease to
 // update until battery is charged again. The ESP32 will deep-sleep (consuming
 // < 11μA), waking briefly check the voltage at the corresponding interval (in
-// minutes). Once the battery voltage has fallen to CRIT_LOW_BATTERY_VOLTAGE,
-// the esp32 will hibernate and a manual press of the reset (RST) button to
-// begin operating again.
+// minutes). Below CRIT_LOW_BATTERY_VOLTAGE it only wakes every
+// CRIT_LOW_BATTERY_SLEEP_INTERVAL to check whether it is being charged.
+// While on USB power the display keeps updating regardless of voltage.
 const uint32_t WARN_BATTERY_VOLTAGE     = 3535; // (millivolts) ~20%
 const uint32_t LOW_BATTERY_VOLTAGE      = 3462; // (millivolts) ~10%
 const uint32_t VERY_LOW_BATTERY_VOLTAGE = 3442; // (millivolts)  ~8%
 const uint32_t CRIT_LOW_BATTERY_VOLTAGE = 3404; // (millivolts)  ~5%
 const unsigned long LOW_BATTERY_SLEEP_INTERVAL      = 30;  // (minutes)
 const unsigned long VERY_LOW_BATTERY_SLEEP_INTERVAL = 120; // (minutes)
+const unsigned long CRIT_LOW_BATTERY_SLEEP_INTERVAL = 10;  // (minutes)
 // Battery voltage calculations are based on a typical 3.7v LiPo.
 const uint32_t MAX_BATTERY_VOLTAGE = 4200; // (millivolts)
 const uint32_t MIN_BATTERY_VOLTAGE = 3000; // (millivolts)
