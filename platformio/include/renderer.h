@@ -92,6 +92,8 @@ void drawStatusBar(const String &statusStr, const String &refreshTimeStr,
                    int rssi, uint32_t batVoltage);
 void drawError(const uint8_t *bitmap_196x196,
                const String &errMsgLn1, const String &errMsgLn2="");
+void drawSetupScreen(const String &qrText, const String &title,
+                     const String lines[], int lineCount);
 void drawCurrentSunrise(const owm_current_t &current);
 void drawCurrentSunset(const owm_current_t &current);
 void drawCurrentInTemp(float inTemp);

@@ -16,6 +16,7 @@ Dependencies:
   Python 3, Pillow
 """
 
+import csv
 import hashlib
 import io
 import re
@@ -36,7 +37,11 @@ CACHE_DIR = SCRIPT_DIR / 'cache'
 CHARSET_SOURCES = [
     PIO_DIR / 'include' / 'locales' / 'locale_zh_CN.inc',
     PIO_DIR / 'src' / 'config.cpp',
+    PIO_DIR / 'src' / 'provisioning.cpp',
 ]
+# Short city names selectable in the setup portal. Only added to fonts with
+# 'cities': True (the size the city name is drawn at), to save flash.
+CITIES_CSV = REPO_DIR / 'cities' / 'cities_zh_CN.csv'
 # Optional newline/whitespace separated list of additional characters, e.g.
 # every city name that can be selected during provisioning.
 EXTRA_CHARS_FILE = SCRIPT_DIR / 'extra_chars.txt'
@@ -66,6 +71,7 @@ SOURCES = {
 # size:   pixel size passed to FreeType
 # mode:   'mono' renders without anti-aliasing (for pixel fonts at their
 #         native size), 'threshold' renders anti-aliased and thresholds at 50%
+# cities: optional; True to also include every short city name
 FONTS = [
     {'id': 'FusionPixel_12px', 'source': 'fusion-pixel-12px', 'size': 12,
      'mode': 'mono'},
@@ -74,7 +80,7 @@ FONTS = [
     {'id': 'NotoSansSC_22px', 'source': 'noto-sans-sc', 'size': 22,
      'mode': 'threshold'},
     {'id': 'NotoSansSC_28px', 'source': 'noto-sans-sc', 'size': 28,
-     'mode': 'threshold'},
+     'mode': 'threshold', 'cities': True},
     {'id': 'NotoSansSC_44px', 'source': 'noto-sans-sc', 'size': 44,
      'mode': 'threshold'},
 ]
@@ -103,6 +109,12 @@ def collect_charset():
         sys.exit('error: characters outside the BMP are not supported: '
                  + ''.join(non_bmp))
     return sorted(chars)
+
+
+def collect_city_chars():
+    with CITIES_CSV.open(encoding='utf-8') as f:
+        names = [row['short_name'] for row in csv.DictReader(f)]
+    return {c for name in names for c in name if ord(c) > 0xFF}
 
 
 def fetch_source(key):
@@ -212,11 +224,16 @@ def generate_font(spec, charset):
 
 def main():
     charset = collect_charset()
+    city_chars = collect_city_chars()
     print(f'{len(charset)} characters: {"".join(charset)}')
+    print(f'{len(city_chars)} characters in city names')
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     total = 0
     for spec in FONTS:
-        size = generate_font(spec, charset)
+        font_charset = charset
+        if spec.get('cities'):
+            font_charset = sorted(set(charset) | city_chars)
+        size = generate_font(spec, font_charset)
         total += size
         print(f'{spec["id"]}: ~{size} bytes')
     includes = '\n'.join(f'#include "{spec["id"]}.h"' for spec in FONTS)

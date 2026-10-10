@@ -65,7 +65,16 @@ void saveSettings()
   prefs.begin(NVS_NAMESPACE, false);
   prefs.putString(KEY_WIFI_SSID, settings.wifiSsid);
   prefs.putString(KEY_WIFI_PASSWORD, settings.wifiPassword);
-  prefs.putString(KEY_OWM_APIKEY, settings.owmApiKey);
+  // only store an API key that differs from the build-time default, so
+  // devices pick up a new default key with a firmware update
+  if (settings.owmApiKey == OWM_APIKEY)
+  {
+    prefs.remove(KEY_OWM_APIKEY);
+  }
+  else
+  {
+    prefs.putString(KEY_OWM_APIKEY, settings.owmApiKey);
+  }
   prefs.putString(KEY_LAT, settings.lat);
   prefs.putString(KEY_LON, settings.lon);
   prefs.putString(KEY_CITY, settings.city);

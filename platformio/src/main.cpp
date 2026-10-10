@@ -29,6 +29,7 @@
 #include "config.h"
 #include "display_utils.h"
 #include "icons/icons_196x196.h"
+#include "provisioning.h"
 #include "renderer.h"
 #include "settings.h"
 
@@ -204,6 +205,10 @@ void setup()
   prefs.end();
 
   loadSettings();
+  if (checkDoubleReset() || !isWiFiConfigured())
+  {
+    runSetupPortal(); // does not return
+  }
 
   String statusStr = {};
   String tmpStr = {};
@@ -221,7 +226,7 @@ void setup()
       Serial.println(TXT_NETWORK_NOT_AVAILABLE);
       do
       {
-        drawError(wifi_x_196x196, TXT_NETWORK_NOT_AVAILABLE);
+        drawError(wifi_x_196x196, TXT_NETWORK_NOT_AVAILABLE, TXT_SETUP_HINT);
       } while (display.nextPage());
     }
     else
@@ -229,7 +234,7 @@ void setup()
       Serial.println(TXT_WIFI_CONNECTION_FAILED);
       do
       {
-        drawError(wifi_x_196x196, TXT_WIFI_CONNECTION_FAILED);
+        drawError(wifi_x_196x196, TXT_WIFI_CONNECTION_FAILED, TXT_SETUP_HINT);
       } while (display.nextPage());
     }
     powerOffDisplay();

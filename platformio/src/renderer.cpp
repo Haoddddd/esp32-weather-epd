@@ -23,6 +23,7 @@
 #include "config.h"
 #include "conversions.h"
 #include "display_utils.h"
+#include "qrcode.h"
 
 // fonts
 #include FONT_HEADER
@@ -1902,3 +1903,64 @@ void drawError(const uint8_t *bitmap_196x196,
   return;
 } // end drawError
 
+// QR code placement, passed to drawQrModules() which esp_qrcode_generate()
+// calls without a user argument.
+static int16_t qrX;
+static int16_t qrY;
+static int16_t qrMaxSize;
+static int16_t qrDrawnSize;
+
+/* Draws the modules of a generated QR code, including a 4 module quiet zone,
+ * scaled to fit qrMaxSize.
+ */
+static void drawQrModules(esp_qrcode_handle_t qrcode)
+{
+  const int modules = esp_qrcode_get_size(qrcode);
+  const int scale = std::max(1, qrMaxSize / (modules + 8));
+  const int16_t x0 = qrX + 4 * scale;
+  const int16_t y0 = qrY + 4 * scale;
+  for (int y = 0; y < modules; ++y)
+  {
+    for (int x = 0; x < modules; ++x)
+    {
+      if (esp_qrcode_get_module(qrcode, x, y))
+      {
+        display.fillRect(x0 + x * scale, y0 + y * scale, scale, scale,
+                         GxEPD_BLACK);
+      }
+    }
+  }
+  qrDrawnSize = (modules + 8) * scale;
+  return;
+} // end drawQrModules
+
+/* Draws the setup mode screen: a QR code on the left, a title and lines of
+ * instructions on the right.
+ */
+void drawSetupScreen(const String &qrText, const String &title,
+                     const String lines[], int lineCount)
+{
+  const int16_t margin = 24;
+  // leave at least 60% of the width for the text
+  qrMaxSize = std::min(DISP_HEIGHT - 2 * margin, DISP_WIDTH * 2 / 5);
+  qrX = margin;
+  qrY = (DISP_HEIGHT - qrMaxSize) / 2;
+  qrDrawnSize = 0;
+  esp_qrcode_config_t cfg = ESP_QRCODE_CONFIG_DEFAULT();
+  cfg.display_func = drawQrModules;
+  cfg.qrcode_ecc_level = ESP_QRCODE_ECC_MED;
+  esp_qrcode_generate(&cfg, qrText.c_str());
+
+  const int16_t textX = qrX + qrDrawnSize + margin;
+  int16_t y = DISP_HEIGHT / 2 - (lineCount * 40 + 60) / 2 + 40;
+  setFont(&FONT_26pt8b);
+  drawString(textX, y, title, LEFT);
+  y += 60;
+  setFont(&FONT_12pt8b);
+  for (int i = 0; i < lineCount; ++i)
+  {
+    drawString(textX, y, lines[i], LEFT);
+    y += 40;
+  }
+  return;
+} // end drawSetupScreen
