@@ -17,6 +17,11 @@
 
 #include <Arduino.h>
 #include "config.h"
+#if __has_include("secrets.h")
+  #include "secrets.h"
+#else
+  #include "secrets.h.example"
+#endif
 
 // PINS
 // The configuration below is intended for use with the project's official 
@@ -44,8 +49,8 @@ const uint8_t PIN_BME_PWR =  4;   // Irrelevant if directly connected to 3.3V
 const uint8_t BME_ADDRESS = 0x76; // 0x76 if SDO -> GND; 0x77 if SDO -> VCC
 
 // WIFI
-const char *WIFI_SSID     = "ssid";
-const char *WIFI_PASSWORD = "password";
+const char *WIFI_SSID     = SECRET_WIFI_SSID;
+const char *WIFI_PASSWORD = SECRET_WIFI_PASSWORD;
 const unsigned long WIFI_TIMEOUT = 10000; // ms, WiFi connection timeout.
 
 // HTTP
@@ -58,7 +63,7 @@ const unsigned HTTP_CLIENT_TCP_TIMEOUT = 10000; // ms
 
 // OPENWEATHERMAP API
 // OpenWeatherMap API key, https://openweathermap.org/
-const String OWM_APIKEY   = "abcdefghijklmnopqrstuvwxyz012345";
+const String OWM_APIKEY   = SECRET_OWM_APIKEY;
 const String OWM_ENDPOINT = "api.openweathermap.org";
 // OpenWeatherMap One Call 2.5 API is deprecated for all new free users
 // (accounts created after Summer 2022).

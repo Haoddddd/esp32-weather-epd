@@ -30,6 +30,7 @@
 #include "display_utils.h"
 #include "icons/icons_196x196.h"
 #include "renderer.h"
+#include "settings.h"
 
 #if defined(SENSOR_BME280)
   #include <Adafruit_BME280.h>
@@ -202,6 +203,8 @@ void setup()
   // All data should have been loaded from NVS. Close filesystem.
   prefs.end();
 
+  loadSettings();
+
   String statusStr = {};
   String tmpStr = {};
   tm timeInfo = {};
@@ -350,9 +353,9 @@ void setup()
                           owm_air_pollution, inTemp, inHumidity);
     drawOutlookGraph(owm_onecall.hourly, owm_onecall.daily, timeInfo);
     drawForecast(owm_onecall.daily, timeInfo);
-    drawLocationDate(CITY_STRING, dateStr);
+    drawLocationDate(settings.city, dateStr);
 #if DISPLAY_ALERTS
-    drawAlerts(owm_onecall.alerts, CITY_STRING, dateStr);
+    drawAlerts(owm_onecall.alerts, settings.city, dateStr);
 #endif
     drawStatusBar(statusStr, refreshTimeStr, wifiRSSI, batteryVoltage);
   } while (display.nextPage());

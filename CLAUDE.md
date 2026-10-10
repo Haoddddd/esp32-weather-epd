@@ -27,7 +27,7 @@ python3 fonts/cjk/gen_cjk_fonts.py      # regenerate CJK fonts after changing zh
 bash fonts/cjk/preview/run_preview.sh   # host build of src/cjk_text.cpp + self-test + sample PNG
 ```
 
-`platformio/src/config.cpp` holds WiFi credentials, the API key, and location. Real values are kept locally and must never be committed; carry them across branches with `git stash`.
+WiFi credentials and the API key live in `platformio/include/secrets.h` (git-ignored; copy `secrets.h.example`). Never commit real values. Without `secrets.h` the build falls back to the empty example, so CI still compiles.
 
 ## Architecture
 
@@ -36,6 +36,7 @@ bash fonts/cjk/preview/run_preview.sh   # host build of src/cjk_text.cpp + self-
 **Configuration is split in two:**
 - `include/config.h` — feature/hardware selection as mutually-exclusive `#define`s (panel, driver board, sensor, locale, units, HTTP mode, wind indicator, widget positions, font, debug level). The bottom of the file has XOR-based `#error` validation; any new exclusive option group needs a matching validation block there.
 - `src/config.cpp` — runtime-ish constants declared `extern` in `config.h` (pins, WiFi credentials, API key, lat/lon, timezone, time formats, sleep schedule, battery thresholds).
+- `settings` — the values a user can change at runtime (WiFi, API key, lat/lon, city) live in the global `settings`, loaded from NVS by `loadSettings()` in `setup()`; unset fields fall back to the `config.cpp` defaults. Code must read `settings.*`, not `WIFI_SSID`/`OWM_APIKEY`/`LAT`/`LON`/`CITY_STRING` directly.
 
 **Module responsibilities:**
 - `client_utils` — WiFi start/kill, SNTP sync, `getOWMonecall` / `getOWMairpollution` HTTP calls.
